@@ -1,0 +1,5 @@
+id: deploy-union-aws-static
+skill: deploy-union-aws
+tier: static
+# Static tier lints the SKILL.md itself (frontmatter, code fences, no secrets).
+# No agent, no LLM. Runs on every change.
