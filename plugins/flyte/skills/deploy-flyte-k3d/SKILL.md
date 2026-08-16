@@ -28,7 +28,8 @@ Required on PATH: `k3d`, `kubectl`, `helm`, `docker`.
 
 - **helm 3.17.x** is what integration-checks pins; newer majors can hit helm's 1 MB
   release-secret limit on large charts. flyte-binary is small, so any helm 3 works, but
-  prefer 3.17.x for parity.
+  prefer 3.17.x for parity. **helm 4** is a new major and untested against this chart —
+  if the Step 4 install errors, fall back to helm 3.17.x before debugging further.
 - Check for an existing cluster before creating one:
 
 ```bash
@@ -73,9 +74,25 @@ if ! k3d cluster list 2>/dev/null | grep -q '^flyte-oss '; then
   done
 fi
 
+# Select the new cluster's context — do NOT assume k3d did it. When KUBECONFIG
+# lists more than one file (common on a dev machine), k3d warns and leaves your
+# PREVIOUS context active, so every kubectl/helm below would target the wrong
+# cluster. Merge into the default kubeconfig and switch there; unlike
+# `export KUBECONFIG=…` this persists across separate shells.
+k3d kubeconfig merge flyte-oss --kubeconfig-merge-default --kubeconfig-switch-context
+kubectl config use-context k3d-flyte-oss
+[ "$(kubectl config current-context)" = "k3d-flyte-oss" ] || {
+  echo "ERROR: not on k3d-flyte-oss (got '$(kubectl config current-context)') — aborting before touching the wrong cluster"; exit 1; }
+
 kubectl create namespace flyte --dry-run=client -o yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
 ```
+
+> [!IMPORTANT] Every step below assumes the `k3d-flyte-oss` context
+> The context switch above lands in `~/.kube/config`, so it holds across new
+> shells — but if you run a step and `kubectl` targets the wrong cluster, re-run
+> `kubectl config use-context k3d-flyte-oss` first. This is the single most common
+> failure on a machine that already has other clusters in `KUBECONFIG`.
 
 ## Step 2: Deploy the object store — RustFS (phase `storage`)
 
