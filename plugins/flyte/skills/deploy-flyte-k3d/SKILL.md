@@ -75,14 +75,17 @@ if ! k3d cluster list 2>/dev/null | grep -q '^flyte-oss '; then
 fi
 
 # Select the new cluster's context — do NOT assume k3d did it. When KUBECONFIG
-# lists more than one file (common on a dev machine), k3d warns and leaves your
-# PREVIOUS context active, so every kubectl/helm below would target the wrong
-# cluster. Merge into the default kubeconfig and switch there; unlike
-# `export KUBECONFIG=…` this persists across separate shells.
-k3d kubeconfig merge flyte-oss --kubeconfig-merge-default --kubeconfig-switch-context
-kubectl config use-context k3d-flyte-oss
+# lists more than one file (common on a dev machine), k3d refuses to write the
+# default kubeconfig ("reduce to one entry") and leaves your PREVIOUS context
+# active, so every kubectl/helm below would target the wrong cluster. Point k3d
+# at ONLY the default kubeconfig for this one command (its own suggested remedy);
+# the merge writes + switches context in ~/.kube/config, which is read first, so
+# the switch persists across separate shells.
+KUBECONFIG="$HOME/.kube/config" k3d kubeconfig merge flyte-oss --kubeconfig-switch-context >/dev/null
 [ "$(kubectl config current-context)" = "k3d-flyte-oss" ] || {
-  echo "ERROR: not on k3d-flyte-oss (got '$(kubectl config current-context)') — aborting before touching the wrong cluster"; exit 1; }
+  echo "ERROR: kubectl is on '$(kubectl config current-context)', not k3d-flyte-oss — aborting before touching the wrong cluster."
+  echo "Fix: ensure \$HOME/.kube/config is first in KUBECONFIG (or 'export KUBECONFIG=\$HOME/.kube/config') and re-run."
+  exit 1; }
 
 kubectl create namespace flyte --dry-run=client -o yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
