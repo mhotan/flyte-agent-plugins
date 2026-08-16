@@ -56,6 +56,14 @@ Single-node cluster with an embedded HTTP registry — the same shape as the CI 
 retry guards a transient blip during node bring-up.
 
 ```bash
+# Pin kubectl/helm to a DEDICATED, throwaway kubeconfig for this cluster. The
+# skill never reads or mutates ~/.kube/config — so it can't hijack your current
+# context and there is no multi-file KUBECONFIG ambiguity (the exact thing that
+# breaks a plain `kubectl` on a machine with other clusters). The env var resets
+# in a new shell, so EVERY code block below re-exports this same line; the file
+# it points at persists, so kubectl stays pinned to k3d across phases.
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig
+
 cat > /tmp/k3d-registry.yaml <<'EOF'
 mirrors:
   "k3d-registry:5000":
@@ -74,28 +82,23 @@ if ! k3d cluster list 2>/dev/null | grep -q '^flyte-oss '; then
   done
 fi
 
-# Select the new cluster's context — do NOT assume k3d did it. When KUBECONFIG
-# lists more than one file (common on a dev machine), k3d refuses to write the
-# default kubeconfig ("reduce to one entry") and leaves your PREVIOUS context
-# active, so every kubectl/helm below would target the wrong cluster. Point k3d
-# at ONLY the default kubeconfig for this one command (its own suggested remedy);
-# the merge writes + switches context in ~/.kube/config, which is read first, so
-# the switch persists across separate shells.
-KUBECONFIG="$HOME/.kube/config" k3d kubeconfig merge flyte-oss --kubeconfig-switch-context >/dev/null
+# Write THIS cluster's kubeconfig into the dedicated file. `k3d kubeconfig get`
+# prints to stdout (no default-kubeconfig write, so no multi-file error), and
+# this also covers the reuse path where the cluster already existed.
+k3d kubeconfig get flyte-oss > "$KUBECONFIG"
 [ "$(kubectl config current-context)" = "k3d-flyte-oss" ] || {
-  echo "ERROR: kubectl is on '$(kubectl config current-context)', not k3d-flyte-oss — aborting before touching the wrong cluster."
-  echo "Fix: ensure \$HOME/.kube/config is first in KUBECONFIG (or 'export KUBECONFIG=\$HOME/.kube/config') and re-run."
-  exit 1; }
+  echo "ERROR: could not select k3d-flyte-oss (got '$(kubectl config current-context)')"; exit 1; }
 
 kubectl create namespace flyte --dry-run=client -o yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
 ```
 
-> [!IMPORTANT] Every step below assumes the `k3d-flyte-oss` context
-> The context switch above lands in `~/.kube/config`, so it holds across new
-> shells — but if you run a step and `kubectl` targets the wrong cluster, re-run
-> `kubectl config use-context k3d-flyte-oss` first. This is the single most common
-> failure on a machine that already has other clusters in `KUBECONFIG`.
+> [!IMPORTANT] Every phase re-exports `KUBECONFIG`
+> `export KUBECONFIG=/tmp/flyte-oss.kubeconfig` is the first line of every code
+> block below. The env var resets in a fresh shell but the file persists, so this
+> keeps kubectl/helm pinned to the k3d cluster **without ever touching
+> `~/.kube/config`**. Run the phases in one shell and the repeated export is a
+> harmless no-op.
 
 ## Step 2: Deploy the object store — RustFS (phase `storage`)
 
@@ -104,6 +107,8 @@ the **same manifest** the integration-checks k3d leg uses (pinned image + digest
 reproducibility), applied into the `flyte` namespace.
 
 ```bash
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
+
 cat > /tmp/rustfs.yaml <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
@@ -175,6 +180,8 @@ kubectl wait --for=condition=Available deploy/rustfs -n flyte --timeout=180s
 client over a short-lived port-forward (integration-checks does the same):
 
 ```bash
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
+
 kubectl -n flyte port-forward svc/rustfs 9000:9000 >/tmp/pf-rustfs.log 2>&1 &
 PF=$!; sleep 3
 # `mc` (minio-client). If absent: curl -fsSL https://dl.min.io/client/mc/release/$(uname -s | tr A-Z a-z)-amd64/mc -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
@@ -190,6 +197,8 @@ mirroring the RustFS manifest style (pinned image, readiness probe, `emptyDir` �
 throwaway state). flyte-binary's `wait-for-db` init container blocks until this is up.
 
 ```bash
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
+
 cat > /tmp/postgres.yaml <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
@@ -329,6 +338,8 @@ fails):
 Install:
 
 ```bash
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
+
 helm repo add flyteorg https://flyteorg.github.io/flyte
 helm repo update
 helm upgrade --install flyte flyteorg/flyte-binary -n flyte -f values-k3d.yaml --wait --timeout 8m
@@ -347,6 +358,8 @@ diagnostics: `kubectl -n flyte describe pod <pod>` and
 Expose the API and the object store to the machine running the SDK/CLI:
 
 ```bash
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
+
 kubectl -n flyte port-forward service/flyte-http 8090:8090 >/tmp/pf-flyte.log 2>&1 &
 kubectl -n flyte port-forward service/rustfs 9000:9000 >/tmp/pf-rustfs.log 2>&1 &
 sleep 3
