@@ -341,7 +341,9 @@ Install:
 export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
 
 helm repo add flyteorg https://flyteorg.github.io/flyte
-helm repo update
+helm repo update flyteorg   # scope to THIS repo — a bare `helm repo update` refreshes
+                            # every repo on the machine and aborts if any unrelated one
+                            # 404s (e.g. a stale kubernetes-dashboard repo)
 helm upgrade --install flyte flyteorg/flyte-binary -n flyte -f values-k3d.yaml --wait --timeout 8m
 
 kubectl -n flyte rollout status deploy/flyte
@@ -360,8 +362,14 @@ Expose the API and the object store to the machine running the SDK/CLI:
 ```bash
 export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
 
-kubectl -n flyte port-forward service/flyte-http 8090:8090 >/tmp/pf-flyte.log 2>&1 &
-kubectl -n flyte port-forward service/rustfs 9000:9000 >/tmp/pf-rustfs.log 2>&1 &
+# Start DURABLE port-forwards: nohup + disown so they survive this shell exiting
+# and are still alive for Step 6 (which runs in a separate shell). Kill any stale
+# ones first so re-running this phase doesn't stack duplicate forwards on the port.
+pkill -f 'port-forward.*flyte-http' 2>/dev/null || true
+pkill -f 'port-forward.*svc/rustfs' 2>/dev/null || true
+pkill -f 'port-forward.*service/rustfs' 2>/dev/null || true
+nohup kubectl -n flyte port-forward service/flyte-http 8090:8090 >/tmp/pf-flyte.log 2>&1 & disown
+nohup kubectl -n flyte port-forward service/rustfs   9000:9000 >/tmp/pf-rustfs.log 2>&1 & disown
 sleep 3
 
 curl -s -X POST \
