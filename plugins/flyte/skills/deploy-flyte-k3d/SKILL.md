@@ -417,13 +417,34 @@ export AWS_REGION=us-east-1
 ## Step 6: Run the functional tests (optional, phase `functional`)
 
 Once the endpoint answers, the shared `flyte-functional-tests` suite is the deterministic
-verdict. Point it at the port-forwarded API and object store; the OSS-only scenarios run
-and the Union-platform scenarios (`trigger`, `reusable`, `app`) auto-skip on a flyte-binary
-backend.
+verdict. It ships with **flyte-sdk** (not a standalone PyPI package), so this phase is
+**optional**: if the suite is not installed, the deploy is already confirmed by Step 5's
+`ListProjects` and this skips cleanly rather than failing. When present, the OSS-only
+scenarios run and the Union-platform scenarios (`trigger`, `reusable`, `app`) auto-skip on
+a flyte-binary backend.
 
 ```bash
+export KUBECONFIG=/tmp/flyte-oss.kubeconfig   # pin to the k3d cluster (see Step 1)
+
+# Optional gate: skip cleanly if the suite is not installed. The deploy is
+# already verified by Step 5 — do NOT treat "not installed" as a failure.
+python -c "import flyte_functional_tests" 2>/dev/null || {
+  echo "flyte-functional-tests not installed — skipping (deploy verified in Step 5). Install it from flyte-sdk to run the suite."
+  exit 0; }
+
+# Reuse Step 5's durable port-forwards; restart them if they died.
+curl -sf -X POST http://localhost:8090/flyteidl2.project.ProjectService/ListProjects \
+  -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1 || {
+  nohup kubectl -n flyte port-forward service/flyte-http 8090:8090 >/tmp/pf-flyte.log 2>&1 & disown
+  nohup kubectl -n flyte port-forward service/rustfs   9000:9000 >/tmp/pf-rustfs.log 2>&1 & disown
+  sleep 3; }
+
 export FLYTE_FUNCTIONAL_ENDPOINT=dns:///localhost:8090
 export FLYTE_FUNCTIONAL_PROJECT=flytesnacks
+export FLYTE_AWS_ENDPOINT=http://localhost:9000
+export FLYTE_AWS_ACCESS_KEY_ID=rustfsadmin
+export FLYTE_AWS_SECRET_ACCESS_KEY=rustfsadmin
+export AWS_REGION=us-east-1
 pytest --pyargs flyte_functional_tests -m integration
 ```
 
